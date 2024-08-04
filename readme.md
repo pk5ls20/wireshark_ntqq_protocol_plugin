@@ -8,8 +8,8 @@
 
 ### Support
 
-- [X] Parse client outgoing packets (business TEA decryption, ~~login TEA decryption, login ECDH~~)
-- [ ] Parse client incoming packets
+- [X] Parse client incoming packets (business TEA decryption, ~~login TEA decryption, login ECDH~~)
+- [x] Parse client outgoing packets
 
 ### Usage
 
