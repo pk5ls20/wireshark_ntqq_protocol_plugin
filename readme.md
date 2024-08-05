@@ -4,12 +4,19 @@
 
 > [!NOTE]
 >
+> **This project is provided for learning and communication purposes only, please delete it within 24 hours**
+>
+> **This project is intended solely for learning about computer networking and writing related knowledge with Wireshark**
+>
 > **The project is in a very early WIP stage and is not recommended for use**
 
 ### Support
 
-- [X] Parse client incoming packets (business TEA decryption, ~~login TEA decryption, login ECDH~~)
-- [x] Parse client outgoing packets
+- [ ] login packet
+- [ ] highway packet
+- [X] incoming business uncompressed common packet
+- [ ] incoming business compressed packet
+- [X] outgoing business common packet
 
 ### Usage
 
