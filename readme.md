@@ -1,6 +1,6 @@
 ## wireshark_ntqq_protocol_plugin
 
-![1722779798481](image/readme/1722779798481.png)
+![1722977691752](image/readme/1722977691752.png)
 
 > [!NOTE]
 >
@@ -12,7 +12,7 @@
 
 ### Support
 
-- [x] incoming & outgoing uni packet
+- [X] incoming & outgoing uni packet
 - [ ] incoming & outgoing login packet
 - [ ] incoming & outgoing highway packet
 
