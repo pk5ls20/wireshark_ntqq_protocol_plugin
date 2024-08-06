@@ -267,6 +267,9 @@ local function ntqq_protocol_recv_dissector(buffer, pinfo, tree)
     -- raw packet: sso packet
     local sso_enc_packet = reader:read_bytes(reader:remaining())
     local sso_packet_tree = subtree:add("sso_packet", ByteArray.tvb(ByteArray.new(bin_to_hex(sso_enc_packet)), "SSO Packet")())
+    if ntqq_protocol.prefs.d2_key == "" then
+        return
+    end
 
     -- raw packet: sso packet: decrept
     local sso_dec_packet_tvb
@@ -342,33 +345,35 @@ local function ntqq_protocol_send_dissector(buffer, pinfo, tree)
     -- raw packet: sso packet
     local sso_enc_packet = reader:read_bytes(reader:remaining())
     local sso_packet_tree = subtree:add("sso_packet", ByteArray.tvb(ByteArray.new(bin_to_hex(sso_enc_packet)), "SSO Packet")())
+    if ntqq_protocol.prefs.d2_key == "" then
+        return
+    end
 
     -- raw packet: sso packet: decrept
     local sso_dec_packet = tea.decrypt_qq(hex_to_bin(ntqq_protocol.prefs.d2_key), sso_enc_packet)
     sso_packet_tree:add(s_sso_decrept_packet, ByteArray.tvb(ByteArray.new(bin_to_hex(sso_dec_packet)), "SSO Decrypted Packet")())
 
     local sso_packer_reader = Reader.new(sso_dec_packet)
-    local sso_header = sso_packer_reader:read_bytes_with_length("u32", true)
-    -- subtree:add(sso_header, ByteArray.tvb(ByteArray.new(bin_to_hex(sso_header)), "SSO Header")())
-    local sso_header_reader = Reader.new(sso_header)
-    local seq = sso_header_reader:read_u32()
+    local sso_packet_header = sso_packer_reader:read_bytes_with_length("u32", true)
+    local sso_packet_header_reader = Reader.new(sso_packet_header)
+    local seq = sso_packet_header_reader:read_u32()
     sso_packet_tree:add(s_sso_packet_seq, seq)
-    local appid = sso_header_reader:read_u32()
+    local appid = sso_packet_header_reader:read_u32()
     sso_packet_tree:add(s_sso_packet_appid, appid)
-    local locale_id = sso_header_reader:read_u32()
+    local locale_id = sso_packet_header_reader:read_u32()
     sso_packet_tree:add(s_sso_packet_locale_id, locale_id)
-    sso_header_reader:read_bytes(12)
-    local tgt = sso_header_reader:read_bytes_with_length("u32", true)
+    sso_packet_header_reader:read_bytes(12)
+    local tgt = sso_packet_header_reader:read_bytes_with_length("u32", true)
     sso_packet_tree:add(s_sso_packet_tgt, ByteArray.tvb(ByteArray.new(bin_to_hex(tgt)), "tgt")())
-    local cmd = sso_header_reader:read_string_with_length("u32", true)
+    local cmd = sso_packet_header_reader:read_string_with_length("u32", true)
     sso_packet_tree:add(s_sso_packet_cmd, cmd)
-    sso_header_reader:read_bytes_with_length("u32", true)
-    local guid = sso_header_reader:read_bytes_with_length("u32", true)
+    sso_packet_header_reader:read_bytes_with_length("u32", true)
+    local guid = sso_packet_header_reader:read_bytes_with_length("u32", true)
     sso_packet_tree:add(s_sso_packet_guid, ByteArray.tvb(ByteArray.new(bin_to_hex(guid)), "guid")())
-    sso_header_reader:read_bytes_with_length("u32", true)
-    local app_version = sso_header_reader:read_string_with_length("u16", true)
+    sso_packet_header_reader:read_bytes_with_length("u32", true)
+    local app_version = sso_packet_header_reader:read_string_with_length("u16", true)
     sso_packet_tree:add(s_sso_packet_app_version, app_version)
-    local proto_head = sso_header_reader:read_bytes_with_length("u32", true)
+    local proto_head = sso_packet_header_reader:read_bytes_with_length("u32", true)
     sso_packet_tree:add(s_sso_packet_head, ByteArray.tvb(ByteArray.new(bin_to_hex(proto_head)), "head")()) --proto
     -- sso body
     local sso_body_data = sso_packer_reader:read_bytes_with_length("u32", true)
