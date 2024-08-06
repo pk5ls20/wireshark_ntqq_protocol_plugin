@@ -37,3 +37,4 @@
 
 - [synodriver/simple-crypto: A simple c lib to calc md5, tea, and lua binding (github.com)](https://github.com/synodriver/simple-crypto)
 - [LagrangeDev/lagrange-python: An Python Implementation of NTQQ PC Protocol (github.com)](https://github.com/LagrangeDev/lagrange-python)
+- [LagrangeDev/LagrangeGo: An Go Implementation of NTQQ PC Protocol (github.com)](https://github.com/LagrangeDev/LagrangeGo)
