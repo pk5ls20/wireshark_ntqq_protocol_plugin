@@ -252,9 +252,6 @@ local function ntqq_protocol_recv_dissector(buffer, pinfo, tree)
     local raw_packet = reader:read_bytes(packet_len - 4)
     reader = Reader.new(raw_packet)
     local resp_type = reader:read_i32()
-    if resp_type ~= responseType.RequestTypeLogin and resp_type ~= responseType.RequestTypeSimple and resp_type ~= responseType.RequestTypeNT then
-        error("invalid packet type")
-    end
     local enc_flag = reader:read_u8()
     reader:read_u8()
     local uin_str = reader:read_string_with_length("u32", true)
@@ -263,6 +260,9 @@ local function ntqq_protocol_recv_dissector(buffer, pinfo, tree)
     sso_header_tree:add(r_sso_resp_type, resp_type)
     sso_header_tree:add(r_sso_header_enc_flag, enc_flag)
     sso_header_tree:add(r_sso_header_uin, uin)
+    if resp_type ~= responseType.RequestTypeLogin and resp_type ~= responseType.RequestTypeSimple and resp_type ~= responseType.RequestTypeNT then
+        error("invalid packet type")
+    end
 
     -- raw packet: sso packet
     local sso_enc_packet = reader:read_bytes(reader:remaining())
