@@ -1,6 +1,5 @@
--- package.cpath = "C:\\Users\\pk5ls\\Desktop\\ntqq-explore\\wireshark_ntqq_protocol_plugin\\?.dll;" .. package.cpath
--- print(package.cpath)
 local tea = require("tea")
+local zlib = require("zlib")
 
 -- ref https://github.com/LagrangeDev/lagrange-python & https://github.com/LagrangeDev/LagrangeGo
 local Reader = {}
@@ -163,6 +162,7 @@ local sso_recv_length = ProtoField.uint32("sso_recv_length", "sso_recv_length", 
 local sso_resp_type = ProtoField.uint32("sso_resp_type", "sso_resp_type", base.DEC)
 local sso_header_enc_flag = ProtoField.uint32("sso_header_enc_flag", "sso_header_enc_flag", base.DEC)
 local sso_header_uin = ProtoField.string("sso_header_uin", "sso_header_uin", base.NONE)
+local sso_body_compress_type = ProtoField.uint32("sso_body_compress_type", "sso_body_compress_type", base.DEC)
 local sso_body_recv = ProtoField.bytes("sso_body", "sso_body", base.NONE)
 local sso_body_seq = ProtoField.string("sso_body.seq", "sso_body.seq", base.NONE)
 local sso_body_ret_code = ProtoField.string("sso_body.ret_code", "sso_body.ret_code", base.NONE)
@@ -184,9 +184,12 @@ local function parse_sso_frame(buffer, is_oicq_body)
     local data = reader:read_bytes_with_length("u32", false)
     if compress_type == 0 then
     elseif compress_type == 1 then
-        -- TODO: zlib decompress
-        -- data = zlib.inflate(data)
-        error("zlib decompress not implemented")
+        local inflate_stream = zlib.inflate()
+        local decompressed_data, eof, bytes_in, bytes_out = inflate_stream(data)
+        if not eof then
+            error("Decompression did not reach the end of the data stream.")
+        end
+        data = decompressed_data
     elseif compress_type == 2 then
         data = string.sub(data, 5)
     end
@@ -197,6 +200,7 @@ local function parse_sso_frame(buffer, is_oicq_body)
     end
 
     return {
+        compress_type = compress_type,
         seq = seq,
         ret_code = ret_code,
         session_id = session_id,
@@ -270,6 +274,7 @@ local function ntqq_protocol_recv_dissector(buffer, pinfo, tree)
     subtree:add(sso_body_recv, sso_dec_body_tvb())
     -- sso body paste
     local sso_frame = parse_sso_frame(sso_dec_body_tvb():raw(), enc_flag == 2)
+    subtree:add(sso_body_compress_type, sso_frame.compress_type)
     subtree:add(sso_body_seq, sso_frame.seq)
     subtree:add(sso_body_ret_code, sso_frame.ret_code)
     subtree:add(sso_body_session_id, ByteArray.tvb(ByteArray.new(bin_to_hex(sso_frame.session_id)), "session_id")())
@@ -355,8 +360,8 @@ ntqq_protocol.fields = {
     sso_header_seq, sso_header_appid, sso_header_locale_id, sso_header_tgt,
     sso_header_cmd, sso_header_guid, sso_header_app_version, sso_header_head, sso_body_send,
     --recv
-    sso_recv_length, sso_resp_type, sso_header_enc_flag, sso_header_uin, sso_body_recv,
-    sso_body_seq, sso_body_ret_code, sso_body_session_id, sso_body_extra, sso_body_cmd, sso_body_data
+    sso_recv_length, sso_resp_type, sso_header_enc_flag, sso_header_uin, 
+    sso_body_compress_type, sso_body_recv, sso_body_seq, sso_body_ret_code, sso_body_session_id, sso_body_extra, sso_body_cmd, sso_body_data
 }
 
 function ntqq_protocol.dissector(buffer, pinfo, tree)

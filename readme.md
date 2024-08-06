@@ -15,16 +15,17 @@
 - [ ] login packet
 - [ ] highway packet
 - [X] incoming business uncompressed common packet
-- [ ] incoming business compressed packet
+- [X] incoming business compressed packet
 - [X] outgoing business common packet
 
 ### Usage
 
-1. Compile `simple-crypto` manually
-2. Put the compiled `tea.dll/tea.so` into the `package.cpath` of the lua
-3. Place the lua scripts in the Wireshark personal lua scripts directory
-4. Go to `Preferences -> Protocols -> NTQQ_PROTOCOL` to enter the required key in Wireshark
-5. ~~Wireshark, launch!~~
+1. Manually compile git submodule [simple-crypto](https://github.com/pk5ls20/simple-crypto)
+2. Manually compile [brimworks/lua-zlib](https://github.com/brimworks/lua-zlib) (and perhaps [zlib](https://github.com/madler/zlib) as well)
+3. Place the compiled tea and zlib related library files into the directories specified by Lua's package.cpath
+4. Place the lua scripts in the Wireshark personal lua scripts directory
+5. Go to `Preferences -> Protocols -> NTQQ_PROTOCOL` to enter the required key in Wireshark
+6. ~~Wireshark, launch!~~
 
 ### Test environments
 
