@@ -158,20 +158,22 @@ ntqq_protocol.prefs.port = Pref.uint("Port", 8080, "Port")
 
 -- recv protocol
 -- base
-local sso_recv_length = ProtoField.uint32("sso_recv_length", "sso_recv_length", base.DEC)
-local sso_resp_type = ProtoField.uint32("sso_resp_type", "sso_resp_type", base.DEC)
-local sso_header_enc_flag = ProtoField.uint32("sso_header_enc_flag", "sso_header_enc_flag", base.DEC)
-local sso_header_uin = ProtoField.string("sso_header_uin", "sso_header_uin", base.NONE)
-local sso_body_compress_type = ProtoField.uint32("sso_body_compress_type", "sso_body_compress_type", base.DEC)
-local sso_body_recv = ProtoField.bytes("sso_body", "sso_body", base.NONE)
-local sso_body_seq = ProtoField.string("sso_body.seq", "sso_body.seq", base.NONE)
-local sso_body_ret_code = ProtoField.string("sso_body.ret_code", "sso_body.ret_code", base.NONE)
-local sso_body_session_id = ProtoField.bytes("sso_body.session_id", "sso_body.session_id", base.NONE)
-local sso_body_extra = ProtoField.string("sso_body.extra", "sso_body.extra", base.NONE)
-local sso_body_cmd = ProtoField.string("sso_body.cmd", "sso_body.cmd", base.NONE)
-local sso_body_data = ProtoField.bytes("sso_body.data", "sso_body.data", base.NONE)
+local r_packet_length = ProtoField.uint32("receive.raw_packet_length", "raw_packet_length", base.DEC)
+-- header
+local r_sso_resp_type = ProtoField.uint32("receive.sso_resp_type", "resp_type", base.DEC)
+local r_sso_header_enc_flag = ProtoField.uint32("receive.sso_header_enc_flag", "enc_flag", base.DEC)
+local r_sso_header_uin = ProtoField.string("receive.sso_header_uin", "uin", base.NONE)
+-- packet
+local r_sso_decrypt_packet = ProtoField.bytes("receive.sso_decrypt_packet", "sso_decrypt_packet", base.NONE)
+local r_sso_packet_compress_type = ProtoField.uint32("receive.sso_packet_compress_type", "compress_type", base.DEC)
+local r_sso_packet_seq = ProtoField.string("receive.sso_packet.seq", "seq", base.NONE)
+local r_sso_packet_ret_code = ProtoField.string("receive.sso_packet.ret_code", "ret_code", base.NONE)
+local r_sso_packet_session_id = ProtoField.bytes("receive.sso_packet.session_id", "session_id", base.NONE)
+local r_sso_packet_extra = ProtoField.string("receive.sso_packet.extra", "extra", base.NONE)
+local r_sso_packet_cmd = ProtoField.string("receive.sso_packet.cmd", "cmd", base.NONE)
+local r_sso_packet_data = ProtoField.bytes("receive.sso_packet.data", "data", base.NONE)
 
-local function parse_sso_frame(buffer, is_oicq_body)
+local function parse_sso_packet(buffer, is_oicq_body)
     local reader = Reader.new(buffer)
     local head_len, seq, ret_code = reader:read_struct("Iii")
     local extra = reader:read_string_with_length("u32", true)
@@ -237,131 +239,153 @@ local function ntqq_protocol_recv_dissector(buffer, pinfo, tree)
     pinfo.cols.protocol = ntqq_protocol.name
     local subtree = tree:add(ntqq_protocol, buffer())
     local reader = Reader.new(buffer:raw())
-    local body_len = reader:read_u32()
-    subtree:add(sso_recv_length, body_len)
+
+    -- raw packet len
+    local packet_len = reader:read_u32()
+    subtree:add(r_packet_length, packet_len)
     if (lost_segment() == nil) then
-        pdu_impl(body_len, buffer, pinfo)
+        pdu_impl(packet_len, buffer, pinfo)
     end
-    -- body
-    local body = reader:read_bytes(body_len - 4)
-    reader = Reader.new(body)
+
+    -- raw packet
+    -- raw packet: sso header
+    local raw_packet = reader:read_bytes(packet_len - 4)
+    reader = Reader.new(raw_packet)
     local resp_type = reader:read_i32()
-    subtree:add(sso_resp_type, resp_type)
     if resp_type ~= responseType.RequestTypeLogin and resp_type ~= responseType.RequestTypeSimple and resp_type ~= responseType.RequestTypeNT then
         error("invalid packet type")
     end
-
     local enc_flag = reader:read_u8()
-    subtree:add(sso_header_enc_flag, enc_flag)
     reader:read_u8()
     local uin_str = reader:read_string_with_length("u32", true)
-    local uin = tonumber(uin_str)
-    subtree:add(sso_header_uin, uin)
-    local body = reader:read_bytes(reader:remaining())
-    -- sso body decrypt
-    local sso_dec_body_tvb
+    local uin = tonumber(uin_str)    
+    local sso_header_tree = subtree:add("sso_header", ByteArray.tvb(ByteArray.new(bin_to_hex(raw_packet:sub(1, reader.pos))), "SSO Header")())
+    sso_header_tree:add(r_sso_resp_type, resp_type)
+    sso_header_tree:add(r_sso_header_enc_flag, enc_flag)
+    sso_header_tree:add(r_sso_header_uin, uin)
+
+    -- raw packet: sso packet
+    local sso_enc_packet = reader:read_bytes(reader:remaining())
+    local sso_packet_tree = subtree:add("sso_packet", ByteArray.tvb(ByteArray.new(bin_to_hex(sso_enc_packet)), "SSO Packet")())
+
+    -- raw packet: sso packet: decrept
+    local sso_dec_packet_tvb
     if enc_flag == 0 then
-        sso_dec_body_tvb = ByteArray.tvb(body, "SSO Decrypted Data - 0")
+        sso_dec_packet_tvb = ByteArray.tvb(sso_enc_packet, "SSO Packet")
     elseif enc_flag == 1 then
-        local sso_dec_body = tea.decrypt_qq(hex_to_bin(ntqq_protocol.prefs.d2_key), body)
-        local sso_dec_body_data = ByteArray.new(bin_to_hex(sso_dec_body))
-        sso_dec_body_tvb = ByteArray.tvb(sso_dec_body_data, "SSO Decrypted Data - 1")
+        local sso_dec_packet = tea.decrypt_qq(hex_to_bin(ntqq_protocol.prefs.d2_key), sso_enc_packet)
+        local sso_dec_packet_data = ByteArray.new(bin_to_hex(sso_dec_packet))
+        sso_dec_packet_tvb = ByteArray.tvb(sso_dec_packet_data, "SSO Decrypted Packet")
     elseif enc_flag == 2 then
-        local sso_dec_body = tea.decrypt_qq(string.rep("\0", 16), body)
-        local sso_dec_body_data = ByteArray.new(bin_to_hex(sso_dec_body))
-        sso_dec_body_tvb = ByteArray.tvb(sso_dec_body_data, "SSO Decrypted Data - 2")
+        local sso_dec_packet = tea.decrypt_qq(string.rep("\0", 16), sso_enc_packet)
+        local sso_dec_packet_data = ByteArray.new(bin_to_hex(sso_dec_packet))
+        sso_dec_packet_tvb = ByteArray.tvb(sso_dec_packet_data, "SSO Decrypted Packet")
     end
-    subtree:add(sso_body_recv, sso_dec_body_tvb())
-    -- sso body paste
-    local sso_frame = parse_sso_frame(sso_dec_body_tvb():raw(), enc_flag == 2)
-    subtree:add(sso_body_compress_type, sso_frame.compress_type)
-    subtree:add(sso_body_seq, sso_frame.seq)
-    subtree:add(sso_body_ret_code, sso_frame.ret_code)
-    subtree:add(sso_body_session_id, ByteArray.tvb(ByteArray.new(bin_to_hex(sso_frame.session_id)), "session_id")())
-    subtree:add(sso_body_extra, sso_frame.extra)
-    subtree:add(sso_body_cmd, sso_frame.cmd)
-    subtree:add(sso_body_data, ByteArray.tvb(ByteArray.new(bin_to_hex(sso_frame.data)), "data")())
+    sso_packet_tree:add(r_sso_decrypt_packet, sso_dec_packet_tvb())
+
+    -- raw packet: sso packet: paste sso packet
+    local pasted_frame = parse_sso_packet(sso_dec_packet_tvb():raw(), enc_flag == 2)
+    sso_packet_tree:add(r_sso_packet_compress_type, pasted_frame.compress_type)
+    sso_packet_tree:add(r_sso_packet_seq, pasted_frame.seq)
+    sso_packet_tree:add(r_sso_packet_ret_code, pasted_frame.ret_code)
+    sso_packet_tree:add(r_sso_packet_session_id, ByteArray.tvb(ByteArray.new(bin_to_hex(pasted_frame.session_id)), "session_id")())
+    sso_packet_tree:add(r_sso_packet_extra, pasted_frame.extra)
+    sso_packet_tree:add(r_sso_packet_cmd, pasted_frame.cmd)
+
+    -- packet frame: sso packet: sso packet data
+    -- TODO: add body dissectors
+    sso_packet_tree:add(r_sso_packet_data, ByteArray.tvb(ByteArray.new(bin_to_hex(pasted_frame.data)), "SSO Decrypted Packet Data")()) --proto
 end
 
 -- send protocol
-local sso_send_length = ProtoField.uint32("sso_send_length", "sso_send_length", base.DEC)
-local sso_head_d2 = ProtoField.bytes("sso_head_d2", "sso_head_d2", base.NONE)
-local sso_head_uin = ProtoField.string("sso_head_uin", "sso_head_uin", base.NONE)
-local sso_packet = ProtoField.bytes("sso_packet", "sso_packet", base.NONE) -- tea start from here
-local sso_header = ProtoField.bytes("sso_packet.sso_header", "sso_packet.sso_header", base.NONE)
-local sso_header_seq = ProtoField.uint32("sso_packet.sso_header.seq", "sso_packet.sso_header.seq", base.DEC)
-local sso_header_appid = ProtoField.uint32("sso_packet.sso_header.appid", "sso_packet.sso_header.appid", base.DEC)
-local sso_header_locale_id = ProtoField.uint32("sso_packet.sso_header.locale_id", "sso_packet.sso_header.locale_id",
-    base.DEC)
-local sso_header_tgt = ProtoField.bytes("sso_packet.sso_header.tgt", "sso_packet.sso_header.tgt", base.NONE)
-local sso_header_cmd = ProtoField.string("sso_packet.sso_header.cmd", "sso_packet.sso_header.cmd", base.NONE)
-local sso_header_guid = ProtoField.bytes("sso_packet.sso_header.guid", "sso_packet.sso_header.guid", base.NONE)
-local sso_header_app_version = ProtoField.string("sso_packet.sso_header.app_version", "sso_packet.sso_header.app_version",
-    base.NONE)
-local sso_header_head = ProtoField.bytes("sso_packet.sso_header.head", "sso_packet.sso_header.head", base.NONE)
-local sso_body_send = ProtoField.bytes("sso_packet.sso_body", "sso_packet.sso_body", base.NONE)
+-- base
+local s_packet_length = ProtoField.uint32("send.raw_packet_length", "raw_packet_length", base.DEC)
+-- header
+local s_sso_head_d2 = ProtoField.bytes("send.sso_head_d2", "d2", base.NONE)
+local s_sso_head_uin = ProtoField.string("send.sso_head_uin", "uin", base.NONE)
+-- packet
+local s_sso_decrept_packet = ProtoField.bytes("send.sso_decrept_packet", "sso_decrept_packet", base.NONE)
+local s_sso_packet_seq = ProtoField.uint32("send.sso_packet.sso_packet.seq", "seq", base.DEC)
+local s_sso_packet_appid = ProtoField.uint32("send.sso_packet.sso_packet.appid", "appid", base.DEC)
+local s_sso_packet_locale_id = ProtoField.uint32("send.sso_packet.sso_packet.locale_id", "locale_id", base.DEC)
+local s_sso_packet_tgt = ProtoField.bytes("send.sso_packet.sso_packet.tgt", "tgt", base.NONE)
+local s_sso_packet_cmd = ProtoField.string("send.sso_packet.sso_packet.cmd", "cmd", base.NONE)
+local s_sso_packet_guid = ProtoField.bytes("send.sso_packet.sso_packet.guid", "guid", base.NONE)
+local s_sso_packet_app_version = ProtoField.string("send.sso_packet.sso_packet.app_version", "app_version", base.NONE)
+local s_sso_packet_head = ProtoField.bytes("send.sso_packet.sso_packet.head", "head", base.NONE)
+-- packet: sso packet body
+local s_sso_packet_data = ProtoField.bytes("send.sso_packet.sso_packet.data", "data", base.NONE)
 
 local function ntqq_protocol_send_dissector(buffer, pinfo, tree)
     pinfo.cols.protocol = ntqq_protocol.name
     local subtree = tree:add(ntqq_protocol, buffer())
     local reader = Reader.new(buffer:raw())
     local body_len = reader:read_u32()
-    subtree:add(sso_send_length, body_len)
+    subtree:add(s_packet_length, body_len)
     if (lost_segment() == nil) then
         pdu_impl(body_len, buffer, pinfo)
     end
-    -- body
-    local body = reader:read_bytes(body_len - 4)
-    reader = Reader.new(body)
+
+    -- raw packet
+    -- raw packet: sso header
+    local raw_packet = reader:read_bytes(body_len - 4)
+    reader = Reader.new(raw_packet)
     reader:read_u32()
     reader:read_u8()
     local d2 = reader:read_bytes_with_length("u32", true)
-    subtree:add(sso_head_d2, ByteArray.tvb(ByteArray.new(bin_to_hex(d2)), "d2key")())
     reader:read_u8()
     local uin = reader:read_string_with_length("u32", true)
-    subtree:add(sso_head_uin, uin)
-    local enc_sso_packet = reader:read_bytes(reader:remaining())
-    local dec_sso_packet = tea.decrypt_qq(hex_to_bin(ntqq_protocol.prefs.d2_key), enc_sso_packet)
-    subtree:add(sso_packet, ByteArray.tvb(ByteArray.new(bin_to_hex(dec_sso_packet)), "SSO Packet")())
-    -- sso
-    -- sso header
-    local sso_reader = Reader.new(dec_sso_packet)
-    -- sso header read
-    local sso_header = sso_reader:read_bytes_with_length("u32", true)
-    subtree:add(sso_header, ByteArray.tvb(ByteArray.new(bin_to_hex(sso_header)), "SSO Header")())
+    local sso_header_tree = subtree:add("sso_header", ByteArray.tvb(ByteArray.new(bin_to_hex(raw_packet:sub(1, reader.pos))), "SSO Header")())
+    sso_header_tree:add(s_sso_head_d2, ByteArray.tvb(ByteArray.new(bin_to_hex(d2)), "d2key")())
+    sso_header_tree:add(s_sso_head_uin, uin)
+
+    -- raw packet: sso packet
+    local sso_enc_packet = reader:read_bytes(reader:remaining())
+    local sso_packet_tree = subtree:add("sso_packet", ByteArray.tvb(ByteArray.new(bin_to_hex(sso_enc_packet)), "SSO Packet")())
+
+    -- raw packet: sso packet: decrept
+    local sso_dec_packet = tea.decrypt_qq(hex_to_bin(ntqq_protocol.prefs.d2_key), sso_enc_packet)
+    sso_packet_tree:add(s_sso_decrept_packet, ByteArray.tvb(ByteArray.new(bin_to_hex(sso_dec_packet)), "SSO Decrypted Packet")())
+
+    local sso_packer_reader = Reader.new(sso_dec_packet)
+    local sso_header = sso_packer_reader:read_bytes_with_length("u32", true)
+    -- subtree:add(sso_header, ByteArray.tvb(ByteArray.new(bin_to_hex(sso_header)), "SSO Header")())
     local sso_header_reader = Reader.new(sso_header)
     local seq = sso_header_reader:read_u32()
-    subtree:add(sso_header_seq, seq)
+    sso_packet_tree:add(s_sso_packet_seq, seq)
     local appid = sso_header_reader:read_u32()
-    subtree:add(sso_header_appid, appid)
+    sso_packet_tree:add(s_sso_packet_appid, appid)
     local locale_id = sso_header_reader:read_u32()
-    subtree:add(sso_header_locale_id, locale_id)
+    sso_packet_tree:add(s_sso_packet_locale_id, locale_id)
     sso_header_reader:read_bytes(12)
     local tgt = sso_header_reader:read_bytes_with_length("u32", true)
-    subtree:add(sso_header_tgt, ByteArray.tvb(ByteArray.new(bin_to_hex(tgt)), "tgt")())
+    sso_packet_tree:add(s_sso_packet_tgt, ByteArray.tvb(ByteArray.new(bin_to_hex(tgt)), "tgt")())
     local cmd = sso_header_reader:read_string_with_length("u32", true)
-    subtree:add(sso_header_cmd, cmd)
+    sso_packet_tree:add(s_sso_packet_cmd, cmd)
     sso_header_reader:read_bytes_with_length("u32", true)
     local guid = sso_header_reader:read_bytes_with_length("u32", true)
-    subtree:add(sso_header_guid, ByteArray.tvb(ByteArray.new(bin_to_hex(guid)), "guid")())
+    sso_packet_tree:add(s_sso_packet_guid, ByteArray.tvb(ByteArray.new(bin_to_hex(guid)), "guid")())
     sso_header_reader:read_bytes_with_length("u32", true)
     local app_version = sso_header_reader:read_string_with_length("u16", true)
-    subtree:add(sso_header_app_version, app_version)
+    sso_packet_tree:add(s_sso_packet_app_version, app_version)
     local proto_head = sso_header_reader:read_bytes_with_length("u32", true)
-    subtree:add(sso_header_head, ByteArray.tvb(ByteArray.new(bin_to_hex(proto_head)), "proto head")())
+    sso_packet_tree:add(s_sso_packet_head, ByteArray.tvb(ByteArray.new(bin_to_hex(proto_head)), "head")()) --proto
     -- sso body
-    local sso_body = sso_reader:read_bytes_with_length("u32", true)
-    subtree:add(sso_body_send, ByteArray.tvb(ByteArray.new(bin_to_hex(sso_body)), "SSO Packet Body")())
+    local sso_body_data = sso_packer_reader:read_bytes_with_length("u32", true)
+    sso_packet_tree:add(s_sso_packet_data, ByteArray.tvb(ByteArray.new(bin_to_hex(sso_body_data)), "SSO Packet Body")()) --proto
 end
 
 ntqq_protocol.fields = {
     -- send
-    sso_send_length, sso_head_d2, sso_head_uin, sso_packet, sso_header,
-    sso_header_seq, sso_header_appid, sso_header_locale_id, sso_header_tgt,
-    sso_header_cmd, sso_header_guid, sso_header_app_version, sso_header_head, sso_body_send,
-    --recv
-    sso_recv_length, sso_resp_type, sso_header_enc_flag, sso_header_uin, 
-    sso_body_compress_type, sso_body_recv, sso_body_seq, sso_body_ret_code, sso_body_session_id, sso_body_extra, sso_body_cmd, sso_body_data
+    s_packet_length, s_sso_head_d2, s_sso_head_uin, 
+    s_sso_decrept_packet,
+    s_sso_packet_seq, s_sso_packet_appid, s_sso_packet_locale_id, s_sso_packet_tgt, s_sso_packet_cmd, s_sso_packet_guid, s_sso_packet_app_version, s_sso_packet_head,
+    s_sso_packet_data,
+    -- recv
+    r_packet_length, r_sso_resp_type, r_sso_header_enc_flag, r_sso_header_uin, 
+    r_sso_decrypt_packet, 
+    r_sso_packet_compress_type, r_sso_packet_seq, r_sso_packet_ret_code, r_sso_packet_session_id, r_sso_packet_extra, r_sso_packet_cmd,
+    r_sso_packet_data
 }
 
 function ntqq_protocol.dissector(buffer, pinfo, tree)

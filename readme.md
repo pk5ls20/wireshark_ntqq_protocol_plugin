@@ -12,11 +12,9 @@
 
 ### Support
 
-- [ ] login packet
-- [ ] highway packet
-- [X] incoming business uncompressed common packet
-- [X] incoming business compressed packet
-- [X] outgoing business common packet
+- [x] incoming & outgoing uni packet
+- [ ] incoming & outgoing login packet
+- [ ] incoming & outgoing highway packet
 
 ### Usage
 
