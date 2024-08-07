@@ -153,8 +153,10 @@ local lost_segment = Field.new('tcp.analysis.lost_segment')
 -- global NTQQ protocol
 local ntqq_protocol = Proto("ntqq_protocol", "NTQQ Protocol")
 
-ntqq_protocol.prefs.d2_key = Pref.string("Business_D2Key", "", "Business_D2Key")
-ntqq_protocol.prefs.port = Pref.uint("Port", 8080, "Port")
+ntqq_protocol.prefs.d2_key = Pref.string("Business_D2Key", "", "Business_D2Key") -- TODO: Fill in multiple d2keys and automatically select based on uin
+ntqq_protocol.prefs.port = Pref.string("Uni Packet Port", "80,8080", "Port")  -- TODO: dynamic choice port
+
+local package_type = ProtoField.string("ntqq_protocol.package_type", "package_type", base.NONE)
 
 -- recv protocol
 -- base
@@ -213,9 +215,10 @@ local function parse_sso_packet(buffer, is_oicq_body)
 end
 
 local responseType = {
-    RequestTypeLogin = 10,
-    RequestTypeSimple = 11,
-    RequestTypeNT = 12
+    [10] = "RequestTypeLogin",
+    [11] = "RequestTypeSimple",
+    [12] = "RequestTypeNT",
+    [13] = "unknown",
 }
 
 local function pdu_impl(body_len, buffer, pinfo)
@@ -235,10 +238,10 @@ local function pdu_impl(body_len, buffer, pinfo)
 end
 
 
-local function ntqq_protocol_recv_dissector(buffer, pinfo, tree)
-    pinfo.cols.protocol = ntqq_protocol.name
+local function ntqq_protocol_uni_login_receive_dissector(buffer, pinfo, tree)
     local subtree = tree:add(ntqq_protocol, buffer())
     local reader = Reader.new(buffer:raw())
+    subtree:add(package_type, "UniPacket")
 
     -- raw packet len
     local packet_len = reader:read_u32()
@@ -260,7 +263,8 @@ local function ntqq_protocol_recv_dissector(buffer, pinfo, tree)
     sso_header_tree:add(r_sso_resp_type, resp_type)
     sso_header_tree:add(r_sso_header_enc_flag, enc_flag)
     sso_header_tree:add(r_sso_header_uin, uin)
-    if resp_type ~= responseType.RequestTypeLogin and resp_type ~= responseType.RequestTypeSimple and resp_type ~= responseType.RequestTypeNT then
+    -- print("resp_type", resp_type, type(resp_type), responseType[resp_type])
+    if not responseType[resp_type] then
         error("invalid packet type")
     end
 
@@ -319,9 +323,9 @@ local s_sso_packet_head = ProtoField.bytes("send.sso_packet.sso_packet.head", "h
 -- packet: sso packet body
 local s_sso_packet_data = ProtoField.bytes("send.sso_packet.sso_packet.data", "data", base.NONE)
 
-local function ntqq_protocol_send_dissector(buffer, pinfo, tree)
-    pinfo.cols.protocol = ntqq_protocol.name
+local function ntqq_protocol_uni_login_send_dissector(buffer, pinfo, tree)
     local subtree = tree:add(ntqq_protocol, buffer())
+    subtree:add(package_type, "UniPacket")
     local reader = Reader.new(buffer:raw())
     local body_len = reader:read_u32()
     subtree:add(s_packet_length, body_len)
@@ -380,30 +384,114 @@ local function ntqq_protocol_send_dissector(buffer, pinfo, tree)
     sso_packet_tree:add(s_sso_packet_data, ByteArray.tvb(ByteArray.new(bin_to_hex(sso_body_data)), "SSO Packet Body")()) --proto
 end
 
+-- highway protocol
+local h_head = ProtoField.bytes("highway.head", "head", base.NONE)
+local h_body = ProtoField.bytes("highway.body", "body", base.NONE)
+
+-- frame data structure ref:  https://github.com/LagrangeDev/LagrangeGo/blob/master/client/internal/highway/frame.go
+-- frame head part
+-- -- STX: 0x28(40) (1 byte)
+-- -- head length (4 bytes)
+-- -- body length (4 bytes)
+-- frame head data part
+-- frame body data part
+-- frame ETX part: 0x29(41) (1 byte)
+local function ntqq_protocol_tcp_highway_dissector(tvb, pinfo, tree)
+    local reader = Reader.new(tvb:raw())
+    local flag = reader:read_u8()
+    local head_len = reader:read_u32()
+    local body_len = reader:read_u32()
+    if flag ~= 0x28 or head_len > 1500 then
+        -- error("invalid packet length")  -- head larger than common MTU, invalid packet
+        return
+    end
+    -- print("head_len", head_len, "body_len", body_len, "tvb:len()", tvb:len(), "all head=", tvb:range(0, 9):bytes():tohex())
+    if (lost_segment() == nil) then
+        pdu_impl(9 + head_len + body_len + 1, tvb, pinfo) 
+    end
+    local subtree = tree:add(ntqq_protocol, tvb())
+    subtree:add(package_type, "HighwayPacket (TCP)")
+    subtree:add(h_head, tvb:range(9, head_len), "HighwayPacket Head")
+    subtree:add(h_body, tvb:range(9 + head_len, body_len), "HighwayPacket Body")
+end
+
+-- fields
 ntqq_protocol.fields = {
-    -- send
+    -- type
+    package_type,
+    -- uni & login send
     s_packet_length, s_sso_head_d2, s_sso_head_uin, 
     s_sso_decrept_packet,
     s_sso_packet_seq, s_sso_packet_appid, s_sso_packet_locale_id, s_sso_packet_tgt, s_sso_packet_cmd, s_sso_packet_guid, s_sso_packet_app_version, s_sso_packet_head,
     s_sso_packet_data,
-    -- recv
+    -- uni & login recv
     r_packet_length, r_sso_resp_type, r_sso_header_enc_flag, r_sso_header_uin, 
     r_sso_decrypt_packet, 
     r_sso_packet_compress_type, r_sso_packet_seq, r_sso_packet_ret_code, r_sso_packet_session_id, r_sso_packet_extra, r_sso_packet_cmd,
-    r_sso_packet_data
+    r_sso_packet_data,
+    -- highway packet
+    h_head, h_body
 }
+
+local port_table = {}
+
+-- add ports in port_table
+for port in string.gmatch(ntqq_protocol.prefs.port, "%d+") do
+    -- print("adding port", port)
+    port_table[tonumber(port)] = true
+end
+
+-- Assume that the first packet you receive is always correct
+-- TODO: Add another check method
+local function simple_check_uni_pkt(tvb)
+    return tvb:range(0, 4):uint() == tvb:len()
+end
+
+local function simple_check_highway_pkt(tvb)
+    return tvb:range(0, 1):bytes():tohex() == "28" and tvb:range(1, 4):uint() < 1500 and tvb:len() > 9
+end
+
+local function heur_dissect_ntqq_tcp_protocol(tvb, pinfo, tree)
+    -- print("heuristic_dissector called, tvb len=", tvb:len(), "packet_len=", except_uni_len)
+    if simple_check_uni_pkt(tvb) or simple_check_highway_pkt(tvb) then
+        pinfo.conversation = ntqq_protocol
+        return true
+    else
+        return false
+    end
+end
+
+local http_host_field = Field.new("http.host")
+local http_uri_field = Field.new("http.request.uri")
+
+local function heur_dissect_ntqq_http_protocol(tvb, pinfo, tree)
+    local http_host = http_host_field()
+    local http_uri = http_uri_field()
+    if http_host and http_uri and tostring(http_uri):match("/cgi%-bin/httpconn%?htcmd=.-&uin=.-") then
+        -- print("heuristic_dissector HTTP called, http_host=", http_host, "http_uri=", http_uri)
+        local subtree = tree:add(ntqq_protocol, tvb())
+        subtree:add(package_type, "HighwayPacket (HTTP)")
+        pinfo.cols.protocol = ntqq_protocol.name
+        pinfo.conversation = ntqq_protocol
+        return true
+    else
+        return false
+    end
+end
 
 function ntqq_protocol.dissector(buffer, pinfo, tree)
     pinfo.cols.protocol = ntqq_protocol.name
-    if pinfo.src_port == ntqq_protocol.prefs.port then
-        ntqq_protocol_recv_dissector(buffer, pinfo, tree)
-    end
-    if pinfo.dst_port == ntqq_protocol.prefs.port then
-        ntqq_protocol_send_dissector(buffer, pinfo, tree)
+    -- TODO: Optimize the packet categorization method for packages
+    if simple_check_highway_pkt(buffer) then
+        ntqq_protocol_tcp_highway_dissector(buffer, pinfo, tree)
+    else
+        if port_table[pinfo.src_port] then
+            ntqq_protocol_uni_login_receive_dissector(buffer, pinfo, tree)
+        elseif port_table[pinfo.dst_port] then
+            ntqq_protocol_uni_login_send_dissector(buffer, pinfo, tree)
+        end
     end
 end
 
-local tcp_port = DissectorTable.get("tcp.port")
-if tcp_port then
-    tcp_port:add(ntqq_protocol.prefs.port, ntqq_protocol)
-end
+ntqq_protocol:register_heuristic("tcp", heur_dissect_ntqq_tcp_protocol)
+ntqq_protocol:register_heuristic("http", heur_dissect_ntqq_http_protocol)
