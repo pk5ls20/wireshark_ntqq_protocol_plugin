@@ -12,8 +12,7 @@
 
 ### Support
 
-- [X] incoming & outgoing Uni TCP packet
-- [ ] incoming & outgoing Login TCP packet
+- [X] incoming & outgoing uni TCP packet
 - [X] incoming & outgoing Highway (TCP, HTTP) packet
 
 ### Usage

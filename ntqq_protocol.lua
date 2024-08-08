@@ -354,7 +354,13 @@ local function ntqq_protocol_uni_login_send_dissector(buffer, pinfo, tree)
     end
 
     -- raw packet: sso packet: decrept
-    local sso_dec_packet = tea.decrypt_qq(hex_to_bin(ntqq_protocol.prefs.d2_key), sso_enc_packet)
+    local tea_key
+    if d2 == '' then
+        tea_key = "00000000000000000000000000000000"
+    else 
+        tea_key = ntqq_protocol.prefs.d2_key
+    end
+    local sso_dec_packet = tea.decrypt_qq(hex_to_bin(tea_key), sso_enc_packet)
     sso_packet_tree:add(s_sso_decrept_packet, ByteArray.tvb(ByteArray.new(bin_to_hex(sso_dec_packet)), "SSO Decrypted Packet")())
 
     local sso_packer_reader = Reader.new(sso_dec_packet)
