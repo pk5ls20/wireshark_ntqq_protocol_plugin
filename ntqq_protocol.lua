@@ -176,6 +176,7 @@ local r_sso_packet_cmd = ProtoField.string("receive.sso_packet.cmd", "cmd", base
 local r_sso_packet_data = ProtoField.bytes("receive.sso_packet.data", "data", base.NONE)
 
 local function parse_sso_packet(buffer, is_oicq_body)
+    -- print("raw buffer", type(buffer), buffer:len())
     local reader = Reader.new(buffer)
     local head_len, seq, ret_code = reader:read_struct("Iii")
     local extra = reader:read_string_with_length("u32", true)
@@ -214,11 +215,18 @@ local function parse_sso_packet(buffer, is_oicq_body)
     }
 end
 
-local responseType = {
-    [10] = "RequestTypeLogin",
-    [11] = "RequestTypeSimple",
-    [12] = "RequestTypeNT",
-    [13] = "unknown",
+local packetTypeEnum = {
+    RequestTypeLogin = 10,
+    RequestTypeSimple = 11,
+    RequestTypeNT = 12,
+    RequestTypeUnknown13 = 13,
+}
+
+local packetTypeMap = {
+    [10] = packetTypeEnum.RequestTypeLogin,
+    [11] = packetTypeEnum.RequestTypeSimple,
+    [12] = packetTypeEnum.RequestTypeNT,
+    [13] = packetTypeEnum.RequestTypeUnknown13,
 }
 
 local function pdu_impl(body_len, buffer, pinfo)
@@ -234,6 +242,7 @@ local function pdu_impl(body_len, buffer, pinfo)
         return
     else
         -- print("!!! Processing complete PDU")
+        return
     end
 end
 
@@ -263,8 +272,8 @@ local function ntqq_protocol_uni_login_receive_dissector(buffer, pinfo, tree)
     sso_header_tree:add(r_sso_resp_type, resp_type)
     sso_header_tree:add(r_sso_header_enc_flag, enc_flag)
     sso_header_tree:add(r_sso_header_uin, uin)
-    -- print("resp_type", resp_type, type(resp_type), responseType[resp_type])
-    if not responseType[resp_type] then
+    -- print("resp_type", resp_type, type(resp_type), packetTypeMap[resp_type])
+    if not packetTypeMap[resp_type] then
         error("invalid packet type")
     end
 
@@ -278,7 +287,7 @@ local function ntqq_protocol_uni_login_receive_dissector(buffer, pinfo, tree)
     -- raw packet: sso packet: decrept
     local sso_dec_packet_tvb
     if enc_flag == 0 then
-        sso_dec_packet_tvb = ByteArray.tvb(sso_enc_packet, "SSO Packet")
+        sso_dec_packet_tvb = ByteArray.tvb(ByteArray.new(bin_to_hex(sso_enc_packet)), "SSO Packet")
     elseif enc_flag == 1 then
         local sso_dec_packet = tea.decrypt_qq(hex_to_bin(ntqq_protocol.prefs.d2_key), sso_enc_packet)
         local sso_dec_packet_data = ByteArray.new(bin_to_hex(sso_dec_packet))
@@ -289,7 +298,6 @@ local function ntqq_protocol_uni_login_receive_dissector(buffer, pinfo, tree)
         sso_dec_packet_tvb = ByteArray.tvb(sso_dec_packet_data, "SSO Decrypted Packet")
     end
     sso_packet_tree:add(r_sso_decrypt_packet, sso_dec_packet_tvb())
-
     -- raw packet: sso packet: paste sso packet
     local pasted_frame = parse_sso_packet(sso_dec_packet_tvb():raw(), enc_flag == 2)
     sso_packet_tree:add(r_sso_packet_compress_type, pasted_frame.compress_type)
@@ -308,6 +316,7 @@ end
 -- base
 local s_packet_length = ProtoField.uint32("send.raw_packet_length", "raw_packet_length", base.DEC)
 -- header
+local s_sso_head_req_type = ProtoField.uint32("send.sso_head_req_type", "req_type", base.DEC)
 local s_sso_head_d2 = ProtoField.bytes("send.sso_head_d2", "d2", base.NONE)
 local s_sso_head_uin = ProtoField.string("send.sso_head_uin", "uin", base.NONE)
 -- packet
@@ -337,31 +346,43 @@ local function ntqq_protocol_uni_login_send_dissector(buffer, pinfo, tree)
     -- raw packet: sso header
     local raw_packet = reader:read_bytes(body_len - 4)
     reader = Reader.new(raw_packet)
-    reader:read_u32()
-    reader:read_u8()
-    local d2 = reader:read_bytes_with_length("u32", true)
-    reader:read_u8()
-    local uin = reader:read_string_with_length("u32", true)
+    local d2, uin
+    local req_type = reader:read_u32()
+    if req_type == packetTypeEnum.RequestTypeUnknown13 then
+        reader:read_bytes(4)
+        d2, uin = '', ''
+    else
+        reader:read_u8()
+        d2 = reader:read_bytes_with_length("u32", true)
+        reader:read_u8()
+        uin = reader:read_string_with_length("u32", true)
+    end
     local sso_header_tree = subtree:add("sso_header", ByteArray.tvb(ByteArray.new(bin_to_hex(raw_packet:sub(1, reader.pos))), "SSO Header")())
+    sso_header_tree:add(s_sso_head_req_type, req_type)
     sso_header_tree:add(s_sso_head_d2, ByteArray.tvb(ByteArray.new(bin_to_hex(d2)), "d2key")())
     sso_header_tree:add(s_sso_head_uin, uin)
 
     -- raw packet: sso packet
     local sso_enc_packet = reader:read_bytes(reader:remaining())
+    -- print("sso_enc_packet", type(sso_enc_packet), sso_enc_packet:len(), bin_to_hex(sso_enc_packet))
     local sso_packet_tree = subtree:add("sso_packet", ByteArray.tvb(ByteArray.new(bin_to_hex(sso_enc_packet)), "SSO Packet")())
-    if ntqq_protocol.prefs.d2_key == "" then
+    -- raw packet: sso packet: decrept
+    if d2 and not ntqq_protocol.prefs.d2_key then
         return
     end
 
-    -- raw packet: sso packet: decrept
-    local tea_key
-    if d2 == '' then
-        tea_key = "00000000000000000000000000000000"
-    else 
-        tea_key = ntqq_protocol.prefs.d2_key
+    local sso_dec_packet
+    if req_type == packetTypeEnum.RequestTypeUnknown13 then
+        sso_dec_packet = sso_enc_packet
+    elseif d2 then
+        sso_dec_packet = tea.decrypt_qq(hex_to_bin(ntqq_protocol.prefs.d2_key), sso_enc_packet)
+    else
+        sso_dec_packet = tea.decrypt_qq(hex_to_bin("00000000000000000000000000000000"), sso_enc_packet)
     end
-    local sso_dec_packet = tea.decrypt_qq(hex_to_bin(tea_key), sso_enc_packet)
     sso_packet_tree:add(s_sso_decrept_packet, ByteArray.tvb(ByteArray.new(bin_to_hex(sso_dec_packet)), "SSO Decrypted Packet")())
+    if req_type == packetTypeEnum.RequestTypeUnknown13 then
+        error("Pasting header and body for packets of type 12 is not implemented!")
+    end
 
     local sso_packer_reader = Reader.new(sso_dec_packet)
     local sso_packet_header = sso_packer_reader:read_bytes_with_length("u32", true)
@@ -426,7 +447,7 @@ ntqq_protocol.fields = {
     -- type
     package_type,
     -- uni & login send
-    s_packet_length, s_sso_head_d2, s_sso_head_uin, 
+    s_sso_head_req_type, s_packet_length, s_sso_head_d2, s_sso_head_uin, 
     s_sso_decrept_packet,
     s_sso_packet_seq, s_sso_packet_appid, s_sso_packet_locale_id, s_sso_packet_tgt, s_sso_packet_cmd, s_sso_packet_guid, s_sso_packet_app_version, s_sso_packet_head,
     s_sso_packet_data,
@@ -479,6 +500,7 @@ local function heur_dissect_ntqq_http_protocol(tvb, pinfo, tree)
         subtree:add(package_type, "HighwayPacket (HTTP)")
         pinfo.cols.protocol = ntqq_protocol.name
         pinfo.conversation = ntqq_protocol
+        -- TODO: paste http packet data to head and body
         return true
     else
         return false
