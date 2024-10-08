@@ -26,8 +26,8 @@
 
 ### Test environments
 
-- Wireshark Version 4.2.6 (v4.2.6-0-g2acd1a854bab)
-- Wireshark Lua 5.2.4 (with UfW patches)
+- Wireshark Version 4.2.6 (v4.2.6-0-g2acd1a854bab) with Lua 5.2.4 (with UfW patches)
+- Wireshark Version 4.4.0 (v4.4.0-0-g009a163470b5) with Lua 5.4.6 (with UfW patches)
 - MinGW-W64 gcc 12.3.0
 
 ### Special Thanks

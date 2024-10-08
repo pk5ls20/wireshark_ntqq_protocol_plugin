@@ -1,5 +1,6 @@
 local tea = require("tea")
 local zlib = require("zlib")
+local unpack = table.unpack or unpack
 
 -- ref https://github.com/LagrangeDev/lagrange-python & https://github.com/LagrangeDev/LagrangeGo
 local Reader = {}
