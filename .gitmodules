@@ -1,3 +1,6 @@
 [submodule "simple-crypto"]
 	path = simple-crypto
 	url = git@github.com:pk5ls20/simple-crypto.git
+[submodule "lua-zlib"]
+	path = lua-zlib
+	url = git@github.com:pk5ls20/lua-zlib
